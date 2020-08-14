@@ -1,0 +1,360 @@
+<!--
+Author: Sarath Chandra Mekala
+email: mekala.sarath@gmail.com
+
+This is a fun project I have created for my son so that he can learn some geography. All the technologies used on this site are new to me and I have learnt them on the fly, the code will reflect the lack of optimization and refinement :). This project took me around 4-5 days from conception to completion and has provided a much needed boost and excitement while learning new technologies.
+
+Technologies used:
+* Vue.js
+* Bulma CSS
+* Amcharts (https://www.amcharts.com) to render the maps
+* RestCountries api to fetch the country details
+* Google Cloud function to register highscore
+* Google Cloud FireStore to store the results
+
+Some learnings from this project:
+1. Understood CORS (https://developer.mozilla.org/en-US/docs/Web/HTTP/CORS) and how to get it working with GCP functions.
+2. Deployed my first GCP function and FireStore (hurray!!)
+3. Vue.js is super easy and helped me in creating a responsive site in no time.
+4. Bulma CSS is very cool. All the UI jazz comes from Bulma.
+-->
+<!DOCTYPE html>
+<html>
+<head>
+	<meta charset="utf-8">
+	<title>Find the country game</title>
+	<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/bulma/0.6.2/css/bulma.min.css">
+</head>
+<body>
+	<!-- CSS for Amcharts -->
+<style type="text/css">
+	body {
+  		font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
+	}
+	#chartdiv {
+	  width: 100%;
+	  height: 400px;
+	}
+</style>
+<!-- Loading Amcharts -->
+<script src="https://www.amcharts.com/lib/4/core.js"></script>
+<script src="https://www.amcharts.com/lib/4/maps.js"></script>
+<script src="https://www.amcharts.com/lib/4/geodata/worldLow.js"></script>
+<script src="https://www.amcharts.com/lib/4/themes/animated.js"></script>
+<div id="chartdiv"></div>
+<!-- Vue App begins -->
+<div id="app">
+<div class="columns">
+  <div class="column is-half is-offset-1 is-narrow">
+	<!-- Level element to display Score and Lives left -->
+	<nav class="level">
+	  <div class="level-item has-text-centered">
+	    <div>
+	      <p class="heading">Score</p>
+	      <p class="title">{{score}}</p>
+	    </div>
+	  </div>
+	  <div class="level-item has-text-centered">
+	    <div>
+	      <p class="heading">Lives</p>
+	      <p class="title">{{lives}}</p>
+	    </div>
+	  </div>
+	</nav>
+  	<template id="gameblock" v-if="!isGameOver && !hideInput">
+		<div class="field">
+			<label class="label">What Country is this?</label>
+		</div>
+  		<div class="field has-addons">
+		  <div class="control">
+		    <input class="input is-primary is-rounded" type="text" placeholder="Identify the country" v-model="answer"/>
+		  </div>
+		  <div class="control">
+		  	<button class="button is-primary is-rounded" v-on:click="checkanswer">Submit</button>
+		  </div>
+		</div>
+		<div class="field is-grouped">
+			<div class="control">
+				<button @click="show_hint" class="button is-info is-rounded">Show Hint</button>
+			</div>
+			<span style="color:blue;font-weight:bold" v-if="hint">{{hint}}</span>
+		</div>
+	</template>
+	<template v-if="isGameOver && !show_highscore">
+		<div class="field">
+			<label v-if="err_msg_country" style="color:red;font-weight:bold">The country is {{err_msg_country}}</label>
+		</div>
+		<div class="field">
+			<label class="label">Thanks for playing the game. Enter your name to register for highscore</label>
+		</div>
+		<div class="field">
+			<label class="label">Name: </label>
+		</div>
+		<div class="field has-addons">
+			 <div class="control">
+				<input class="input is-rounded is-success" type="text" v-model="player_name"/>
+			</div>
+			 <div class="control">
+				<button class="button is-rounded is-success" @click="register_highscore">Register Score</button>			
+			</div>
+		</div>
+	</template>
+	<template v-if="show_highscore">
+		<div class="box">
+			<table class="table is-bordered is-fullwidth">
+				<thead>
+					<tr>
+						<th>Name</th>
+						<th>Score</th>
+						<th>Date</th>
+					</tr>
+				</thead>
+				<tbody>
+					<tr v-for="player in players">
+						<td>{{player.name}}</td>
+						<td>{{player.score}}</td>
+						<td>{{player.date}}
+					</tr>
+				</tbody>
+			</table>
+			<button class="button is-fullwidth is-info is-rounded" v-bind:class="{'is-loading':isloading}" @click="start_new_game">{{isloading ? 'Loading....' : 'Start Again'}}</button>
+		</div>
+	</template>
+	<div class="container is-fluid" v-if="hideInput && !isGameOver">
+		<p class="is-size-1 has-text-danger has-text-centered" v-if="err_msg_country">Wrong Answer</p>
+		<p class="is-size-1 has-text-success has-text-centered" v-if="!err_msg_country">Correct Answer</p>
+		<button class="button is-large is-fullwidth is-info is-outlined is-rounded" @click="show_new_country">Next</button>
+	</div>
+
+	<!-- Footer -->
+	<div class="has-background-info has-text-white bottom">
+	  <div class="container is-fluid">
+	    <div class="columns">
+	      <div class="column">
+	        <p>Sarath Chandra Mekala</p>
+	      </div>
+	      <div class="column has-text-right">
+	      	<i class="fa fa-linkedin-square"></i>
+	      </div>
+	    </div>
+	  </div>
+	</div>
+  </div>
+  <div class="column is-half" v-if="country_obj">
+  	<label class="label">Country Information</label>
+  	<img v-bind:src="country_obj.flag" width="100" height="100">
+  	<table class="table">
+  		<tr><td>Name</td><td>{{country_obj.name}}</td></tr>
+		<tr><td>Capital</td><td>{{country_obj.capital}}</td></tr>
+		<tr><td>Region</td><td>{{country_obj.region}} - {{country_obj.subregion}}</td></tr>
+		<tr><td>Area</td><td>{{country_obj.area}} km<sup>2</sup></td></tr>
+		<tr><td>Population</td><td>{{country_obj.population}}</td></tr>
+		<tr><td>Timezones</td><td><ul><li v-for="tz in country_obj.timezones">{{tz}}</li></ul></td></tr>		
+		<tr><td>Currencies</td><td><ul><li v-for="cu in country_obj.currencies">{{cu.name}} - {{cu.symbol}}</li></ul></td></tr>
+		<tr><td>Languages</td><td><ul><li v-for="lan in country_obj.languages">{{lan.name}} - {{lan.nativeName}}</li></ul></td></tr>
+		<tr><td>regionalBlocs</td><td><ul><li v-for="rb in country_obj.regionalBlocs">{{rb.acronym}} : {{rb.name}}</li></ul></td></tr>
+  	</table>
+  </div>
+</div>
+</div> <!-- End div-class -->
+<nav class="navbar is-transparent is-fixed-bottom">
+  <div id="navmenu" class="navbar-menu">
+	<!-- 	<div class="navbar-start">
+    </div> -->
+    <div class="navbar-end">
+      <a class="navbar-item is-size-7">
+        (c) Sarath Chandra Mekala
+      </a>
+      <a class="navbar-item is-size-7" href="https://www.amcharts.com/javascript-charts/">
+        Amcharts
+      </a>
+      <a class="navbar-item is-size-7" href="https://restcountries.eu/">
+        Rest Countries
+      </a>
+    </div>
+  </div>
+</nav>
+<!-- Amchart Map logic -->
+<script type="text/javascript">
+	am4core.useTheme(am4themes_animated);
+
+	// Create map instance
+	var chart = am4core.create("chartdiv", am4maps.MapChart);
+
+	// Set map definition
+	chart.geodata = am4geodata_worldLow;
+
+	// Set projection
+	chart.projection = new am4maps.projections.Miller();
+
+	// Create map polygon series
+	var polygonSeries = chart.series.push(new am4maps.MapPolygonSeries());
+
+	// Exclude Antartica
+	polygonSeries.exclude = ["AQ"];
+
+	// Make map load polygon (like country names) data from GeoJSON
+	polygonSeries.useGeodata = true;
+
+	// Configure series
+	var polygonTemplate = polygonSeries.mapPolygons.template;
+	//polygonTemplate.tooltipText = "{name}";
+	polygonTemplate.fill = am4core.color("#74B266");
+
+	// Create active state
+	var as = polygonTemplate.states.create("active");
+	as.properties.fill = am4core.color("#7B3625");
+
+	// Create hover state and set alternative fill color
+	var hs = polygonTemplate.states.create("hover");
+	hs.properties.fill = am4core.color("#367B25");
+
+	chart.events.on("ready", function(ev) {
+		var country = polygonSeries.getPolygonById("IN")
+	  	//chart.zoomToMapObject(country, zoomLevel=3);
+	  	chart.zoomToMapObject(country);
+	  	country.isActive=true;
+	  	
+	});
+</script>
+<!-- Vuejs Logic begins -->
+<script src="https://cdn.jsdelivr.net/npm/vue/dist/vue.js"></script>
+<script type="text/javascript">
+	var app = new Vue({
+		el: "#app",
+		data: {
+			lives: 20,
+			score: 0,
+			answer: null,
+			country: "IN",
+			err_msg_country: null,
+			hideInput: false,
+			hint: null,
+			players: [],
+			player_name: null,
+			show_highscore: false,
+			isGameOver: false,
+			isloading: false,
+			//country_db is massaged to be intune with general country naming pattern.
+			country_db : {"AF":"Afghanistan","AX":"Aland Islands","AL":"Albania","DZ":"Algeria","AS":"American Samoa","AD":"Andorra","AO":"Angola","AI":"Anguilla","AG":"Antigua and Barbuda","AR":"Argentina","AM":"Armenia","AW":"Aruba","AU":"Australia","AT":"Austria","AZ":"Azerbaijan","BS":"Bahamas","BH":"Bahrain","BD":"Bangladesh","BB":"Barbados","BY":"Belarus","BE":"Belgium","BZ":"Belize","BJ":"Benin","BM":"Bermuda","BT":"Bhutan","BO":"Bolivia","BA":"Bosnia and Herzegovina","BW":"Botswana","BV":"Bouvet Island","BR":"Brazil","IO":"British Indian Ocean Territory","BN":"Brunei Darussalam","BG":"Bulgaria","BF":"Burkina Faso","BI":"Burundi","KH":"Cambodia","CM":"Cameroon","CA":"Canada","CV":"Cape Verde","KY":"Cayman Islands","CF":"Central African Republic","TD":"Chad","CL":"Chile","CN":"China","CX":"Christmas Island","CC":"Cocos Keeling Islands","CO":"Colombia","KM":"Comoros","CG":"Congo","CD":"The Democratic Republic of the Congo","CK":"Cook Islands","CR":"Costa Rica","CI":"Cote D'Ivoire","HR":"Croatia","CU":"Cuba","CY":"Cyprus","CZ":"Czech Republic","DK":"Denmark","DJ":"Djibouti","DM":"Dominica","DO":"Dominican Republic","EC":"Ecuador","EG":"Egypt","SV":"El Salvador","GQ":"Equatorial Guinea","ER":"Eritrea","EE":"Estonia","ET":"Ethiopia","FK":"Falkland Islands","FO":"Faroe Islands","FJ":"Fiji","FI":"Finland","FR":"France","GF":"French Guiana","PF":"French Polynesia","TF":"French Southern Territories","GA":"Gabon","GM":"Gambia","GE":"Georgia","DE":"Germany","GH":"Ghana","GI":"Gibraltar","GR":"Greece","GL":"Greenland","GD":"Grenada","GP":"Guadeloupe","GU":"Guam","GT":"Guatemala","GG":"Guernsey","GN":"Guinea","GW":"Guinea-Bissau","GY":"Guyana","HT":"Haiti","HM":"Heard Island and Mcdonald Islands","VA":"Holy See","HN":"Honduras","HK":"Hong Kong","HU":"Hungary","IS":"Iceland","IN":"India","ID":"Indonesia","IR":"Islamic Republic Of Iran","IQ":"Iraq","IE":"Ireland","IM":"Isle of Man","IL":"Israel","IT":"Italy","JM":"Jamaica","JP":"Japan","JE":"Jersey","JO":"Jordan","KZ":"Kazakhstan","KE":"Kenya","KI":"Kiribati","KP":"Democratic People's Republic of Korea","KR":"Republic of Korea","XK":"Kosovo","KW":"Kuwait","KG":"Kyrgyzstan","LA":"Lao People's Democratic Republic","LV":"Latvia","LB":"Lebanon","LS":"Lesotho","LR":"Liberia","LY":"Libyan Arab Jamahiriya","LI":"Liechtenstein","LT":"Lithuania","LU":"Luxembourg","MO":"Macao","MK":"Macedonia","MG":"Madagascar","MW":"Malawi","MY":"Malaysia","MV":"Maldives","ML":"Mali","MT":"Malta","MH":"Marshall Islands","MQ":"Martinique","MR":"Mauritania","MU":"Mauritius","YT":"Mayotte","MX":"Mexico","FM":"Federated States of Micronesia","MD":"Republic of Moldova","MC":"Monaco","MN":"Mongolia","ME":"Montenegro","MS":"Montserrat","MA":"Morocco","MZ":"Mozambique","MM":"Myanmar","NA":"Namibia","NR":"Nauru","NP":"Nepal","NL":"Netherlands","AN":"Netherlands Antilles","NC":"New Caledonia","NZ":"New Zealand","NI":"Nicaragua","NE":"Niger","NG":"Nigeria","NU":"Niue","NF":"Norfolk Island","MP":"Northern Mariana Islands","NO":"Norway","OM":"Oman","PK":"Pakistan","PW":"Palau","PS":"Palestine","PA":"Panama","PG":"Papua New Guinea","PY":"Paraguay","PE":"Peru","PH":"Philippines","PN":"Pitcairn","PL":"Poland","PT":"Portugal","PR":"Puerto Rico","QA":"Qatar","RE":"Reunion","RO":"Romania","RU":"Russian Federation","RW":"Rwanda","SH":"Saint Helena","KN":"Saint Kitts and Nevis","LC":"Saint Lucia","PM":"Saint Pierre and Miquelon","VC":"Saint Vincent and the Grenadines","WS":"Samoa","SM":"San Marino","ST":"Sao Tome and Principe","SA":"Saudi Arabia","SN":"Senegal","RS":"Serbia","SC":"Seychelles","SL":"Sierra Leone","SG":"Singapore","SK":"Slovakia","SI":"Slovenia","SB":"Solomon Islands","SO":"Somalia","ZA":"South Africa","GS":"South Georgia and the South Sandwich Islands","ES":"Spain","LK":"Sri Lanka","SD":"Sudan","SR":"Suriname","SJ":"Svalbard and Jan Mayen","SZ":"Swaziland","SE":"Sweden","CH":"Switzerland","SY":"Syrian Arab Republic","TW":"Taiwan","TJ":"Tajikistan","TZ":"United Republic of Tanzania","TH":"Thailand","TL":"Democratic Republic of Timor-Leste","TG":"Togo","TK":"Tokelau","TO":"Tonga","TT":"Trinidad and Tobago","TN":"Tunisia","TR":"Turkey","TM":"Turkmenistan","TC":"Turks and Caicos Islands","TV":"Tuvalu","UG":"Uganda","UA":"Ukraine","AE":"United Arab Emirates","GB":"United Kingdom","US":"United States","UM":"United States Minor Outlying Islands","UY":"Uruguay","UZ":"Uzbekistan","VU":"Vanuatu","VE":"Venezuela","VN":"Viet Nam","VG":"British Virgin Islands","VI":"United States Virgin Islands","WF":"Wallis and Futuna","EH":"Western Sahara","YE":"Yemen","ZM":"Zambia","ZW":"Zimbabwe"},
+			country_codes: [],
+			country_details: {},
+			country_obj: null
+		},
+		created(){
+			//county_codes has massaged data instead of the keys returned by RestCountries api
+			this.country_codes = Object.keys(this.country_db);
+			fetch("https://restcountries.eu/rest/v2/all").then(response => response.json()).then(json => {
+				for(i=0;i<json.length;i++){
+					this.country_details[json[i].alpha2Code]=json[i]
+				}
+			})
+		},
+		methods: {
+			checkanswer: function() {
+				this.country_obj = this.country_details[this.country]
+				this.hideInput = true;
+				//Handle blank submissions.
+				if(this.answer == null){this.answer=""}
+				if(this.country_db[this.country].toLowerCase() == this.answer.trim().toLowerCase()){
+					this.score++;
+					this.err_msg_country = null;
+				}
+				else{
+					this.lives--;
+					this.err_msg_country=this.country_db[this.country]
+					if(this.lives <=0){
+						this.isGameOver=true
+						return
+					}
+				}
+			},
+			show_new_country: function() {
+				//Clear the fields
+				this.answer = "";
+				this.hint = null;
+				this.hideInput = false;
+				this.country_obj = null;
+				//Unselect the currently selected country
+				if(this.country != null){
+					polygonSeries.getPolygonById(this.country).isActive=false;	
+				}
+				var rand = this.get_random_int();
+				this.country = this.country_codes[rand]
+				//Remove the country code from the list
+				this.country_codes.splice(rand,1)
+				//console.log("New Country -->"+this.country_db[this.country]+":"+this.country)
+				var mapcountry = polygonSeries.getPolygonById(this.country)
+			  	chart.zoomToMapObject(mapcountry);
+			  	//chart.zoomToMapObject(mapcountry);
+			  	mapcountry.isActive=true;
+			},
+			get_random_int: function(){
+				return Math.floor(Math.random() * Math.floor(this.country_codes.length))
+			},
+			show_hint: function(){
+				var country = this.country_db[this.country]
+				var first = country.charAt(0);
+				var last = country.charAt(country.length-1)
+				var mask = ''
+				for(i=0;i<country.length-2;i++){
+					mask = mask+" _ "
+				}
+				this.hint = first+mask+last
+			},
+			register_highscore: function(){
+				this.show_highscore=true
+				this.isloading = true;
+				var d = new Date();
+				fetch('https://us-central1-fluid-honor-245509.cloudfunctions.net/countrygamehighscore', {
+				    method: 'post', mode:"cors",
+				    headers: {
+					    "Content-type": "application/json; charset=UTF-8"
+					  },
+				    body: JSON.stringify({name: this.player_name, score: this.score, date: d.toDateString() +" "+ d.toTimeString()})
+				  }).then(response => response.json()).then(json => {
+				  	console.log(json)
+				  	return fetch("https://us-central1-fluid-honor-245509.cloudfunctions.net/countrygamehighscore")
+				  }).then(response => response.json()).then(json => {
+					data = json["data"];
+					for(i=0;i<data.length;i++){
+						this.players.push(data[i])
+					}
+				})
+				//Pull the latest highscore list
+				this.player_name=null;
+				this.isloading = false;
+			},
+			start_new_game: function(){
+				this.show_highscore=false;
+				this.isGameOver=false;
+				this.err_msg_country=null;
+				this.score=0;
+				this.lives=20;
+				this.show_new_country();
+			}
+		}
+	})
+</script>
+<div id="disqus_thread"></div>
+<script>
+
+/**
+*  RECOMMENDED CONFIGURATION VARIABLES: EDIT AND UNCOMMENT THE SECTION BELOW TO INSERT DYNAMIC VALUES FROM YOUR PLATFORM OR CMS.
+*  LEARN WHY DEFINING THESE VARIABLES IS IMPORTANT: https://disqus.com/admin/universalcode/#configuration-variables*/
+
+var disqus_config = function () {
+	this.page.url = "http://localhost/disqus.html";  // Replace PAGE_URL with your page's canonical URL variable
+	this.page.identifier = "1"; // Replace PAGE_IDENTIFIER with your page's unique identifier variable
+};
+
+(function() { // DON'T EDIT BELOW THIS LINE
+var d = document, s = d.createElement('script');
+s.src = 'https://techfeedback.disqus.com/embed.js';
+s.setAttribute('data-timestamp', +new Date());
+(d.head || d.body).appendChild(s);
+})();
+</script>
+<noscript>Please enable JavaScript to view the <a href="https://disqus.com/?ref_noscript">comments powered by Disqus.</a></noscript>
+</body>
+</html>
